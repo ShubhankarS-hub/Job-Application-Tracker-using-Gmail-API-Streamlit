@@ -51,7 +51,11 @@ The processed dataset (`data_new_2.csv`) contains the following columns:
 ## Dashboard Features
 
 - **Summary Metrics**: Total applications and rejections count.
+![image](https://github.com/user-attachments/assets/0403c057-1e48-47ca-8b9e-a8f320d89dc4)
+
 - **Filter by Status**: Select one or more application statuses to filter displayed data.
+![image](https://github.com/user-attachments/assets/e5fde9e5-37e5-477a-8066-8b4c1697c6b3)
+
 - **Data Table**: View detailed email records with sender, subject, and status.
 - **Visualizations**:
   - Bar chart showing counts by status.
@@ -73,6 +77,105 @@ The processed dataset (`data_new_2.csv`) contains the following columns:
 - Make sure to keep your `credentials.json` and `token.json` files secure and do not commit them to public repositories.
 
 
+## 📄 Sample Output Dataset (`data_new_2.csv`)
+
+| From            | Subject                        | Status     |
+|-----------------|--------------------------------|------------|
+| careers@xyz.com | Thank you for applying         | Applied    |
+| hr@abc.com      | Unfortunately, you weren’t...  | Rejected   |
+| jobs@pqr.com    | Interview invitation for...    | Interview  |
+
+---
+
+## 🖥️ Source Code
+
+### 🔧 Python (Email Extraction + Classification)
+
+<details>
+<summary>Click to expand</summary>
+
+```python
+import os
+import base64
+import email
+import pandas as pd
+
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+
+SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
+
+def get_gmail_service():
+    creds = None
+    if os.path.exists('token.json'):
+        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+    else:
+        flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
+        creds = flow.run_local_server(port=0)
+        with open('token.json', 'w') as token:
+            token.write(creds.to_json())
+    return build('gmail', 'v1', credentials=creds)
+
+def classify_email(text):
+    text = text.lower()
+    applied_phrases = ["thank you for applying", "your application has been received", "submitted successfully"]
+    rejection_phrases = ["unfortunately", "we regret", "not selected"]
+    interview_phrases = ["interview", "schedule a call", "invite"]
+
+    found_applied = any(phrase in text for phrase in applied_phrases)
+    found_rejected = any(phrase in text for phrase in rejection_phrases)
+    found_interview = any(phrase in text for phrase in interview_phrases)
+
+    if found_applied and found_rejected:
+        return "Rejected"
+    elif found_rejected:
+        return "Rejected"
+    elif found_applied or found_interview:
+        return "Applied"
+
+    return "Others"
+
+def extract_emails_and_save(label_name='IMPORTANT'):
+    service = get_gmail_service()
+    label_id = [label['id'] for label in service.users().labels().list(userId='me').execute()['labels'] if label['name'].lower() == label_name.lower()][0]
+    messages = []
+    response = service.users().messages().list(userId='me', labelIds=[label_id], q="newer_than:90d").execute()
+    messages.extend(response.get('messages', []))
+
+    while 'nextPageToken' in response:
+        response = service.users().messages().list(userId='me', labelIds=[label_id], q="newer_than:90d", pageToken=response['nextPageToken']).execute()
+        messages.extend(response.get('messages', []))
+
+    rows = []
+    for msg in messages:
+        msg_data = service.users().messages().get(userId='me', id=msg['id'], format='raw').execute()
+        raw_msg = base64.urlsafe_b64decode(msg_data['raw'].encode('ASCII'))
+        mime_msg = email.message_from_bytes(raw_msg)
+
+        subject = mime_msg['subject'] or "No Subject"
+        sender = mime_msg['from'] or "Unknown"
+        body = ""
+
+        if mime_msg.is_multipart():
+            for part in mime_msg.walk():
+                if part.get_content_type() == 'text/plain':
+                    body += part.get_payload(decode=True).decode(errors='ignore')
+        else:
+            body = mime_msg.get_payload(decode=True).decode(errors='ignore')
+
+        status = classify_email(subject + " " + body)
+
+        rows.append({
+            "From": sender,
+            "Subject": subject,
+            "Status": status
+        })
+
+    pd.DataFrame(rows).to_csv("data_new_2.csv", index=False)
+    print("✅ Data saved to data_new_2.csv")
+
+extract_emails_and_save()
 
 ---
 
